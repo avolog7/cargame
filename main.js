@@ -176,11 +176,11 @@ async function initPhysics() {
                     child.receiveShadow = true;
                 }
                 if (child.name === "car"){
+                    child.position.y = 0.5;
                     car = child;
                     physics.addMesh( child, 10, 0.7 );
                     chassis = child.userData.physics.body;
                     vehicleController = physics.world.createVehicleController( chassis );
-                    child.position.y = 5;
                 }
                 if (child.name === "Cylinder"){
                     vehicleController.addWheel(
@@ -286,7 +286,7 @@ function updateCarControl() {
 
     if ( movement.reset ) {
 
-        chassis.setTranslation( new physics.RAPIER.Vector3( 0, 1, 0 ), true );
+        chassis.setTranslation( new physics.RAPIER.Vector3( 0, 0.5, 0 ), true );
         chassis.setRotation( new physics.RAPIER.Quaternion( 0, 0, 0, 1 ), true );
         chassis.setLinvel( new physics.RAPIER.Vector3( 0, 0, 0 ), true );
         chassis.setAngvel( new physics.RAPIER.Vector3( 0, 0, 0 ), true );
