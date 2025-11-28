@@ -4,22 +4,13 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RapierPhysics } from 'three/addons/physics/RapierPhysics.js';
 import { RapierHelper } from 'three/addons/helpers/RapierHelper.js';
 
-const scene = new THREE.Scene();
-const canvas = document.getElementById("experience-canvas")
 const raycaster = new THREE.Raycaster();
+const canvas = document.getElementById("experience-canvas");
 const pointer = new THREE.Vector2();
 const sizes = {
     width: window.innerWidth,
     height: window.innerHeight,
 };
-
-const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
-renderer.setSize( sizes.width, sizes.height );
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.shadowMap.enabled = true;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.75;
 
 let intersectObject = "";
 const intersectObjects = [];
@@ -28,140 +19,239 @@ const intersectObjectsNames = [
     "brickRed"
 ];
 
+let camera, scene, renderer;
+let physics, physicsHelper, controls;
 let car, chassis, wheels, movement, vehicleController;
 
-let physics = await RapierPhysics();
+init();
 
-let physicsHelper = new RapierHelper( physics.World );
-scene.add( physicsHelper );
-physics.addScene( scene );
+async function init() {
 
-//gltf
+    scene = new THREE.Scene();
 
-const loader = new GLTFLoader();
-const loaderCar = new GLTFLoader();
+    const sun = new THREE.DirectionalLight( 0xFFFFFF );
+    sun.castShadow = true;
+    sun.position.set(25,30,0);
+    sun.target.position.set(-5,-5,0);
+    sun.shadow.camera.left = -40;
+    sun.shadow.camera.right = 40;
+    sun.shadow.camera.top = 40;
+    sun.shadow.camera.bottom = -40;
+    sun.shadow.normalBias = 0.04;
+    sun.shadow.mapSize.width = 4096;
+    sun.shadow.mapSize.height = 4096;
+    scene.add( sun );   
 
-loader.load( 
+    const shadowHelper = new THREE.CameraHelper( sun.shadow.camera );
+    scene.add( shadowHelper );
+    const helper = new THREE.DirectionalLightHelper( sun, 5 );
+    scene.add( helper );
+
+    const light = new THREE.AmbientLight( 0x404040, 3 ); // soft white light
+    scene.add( light );
+    camera = new THREE.PerspectiveCamera( 
+        75, sizes.width / sizes.height, 0.1, 1000 
+    );
+    scene.add( camera );
+    controls = new OrbitControls( camera, canvas );
+    controls.update();
+    camera.position.y = 10;
+    camera.position.z = 5;
+
+
+    renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });   
+    renderer.setSize( sizes.width, sizes.height );
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.enabled = true;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.75;
+    renderer.setAnimationLoop( animate );
+
+    const loader = new GLTFLoader();
+    loader.load( 
     './car_scene.glb', 
     function ( glb ) {
-        glb.scene.traverse((child) => {
-            if (intersectObjectsNames.includes(child.name)) {
-                intersectObjects.push(child);
-            }
-            if (child.isMesh) {
-                child.castShadow = true;
-                child.receiveShadow = true;
-            }
-            if (child.name === "Plane"){
-                child.userData.physics = { mass: 0 };    
-            }
-        });
-        scene.add( glb.scene );
-    }, 
-    undefined, 
-    function ( error ) {
-        console.error( error );
-    } 
-);
+            glb.scene.traverse((child) => {
+                if (intersectObjectsNames.includes(child.name)) {
+                    intersectObjects.push(child);
+                }
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+                if (child.name === "Plane"){
+                    child.userData.physics = { mass: 0 };    
+                }
+                
+                if (child.name === "Sphere"){
+                    child.userData.physics = { mass: 0.5, restitution: 0.5 };   
+                }
+            });
+            scene.add( glb.scene );
+        }, 
+        undefined, 
+        function ( error ) {
+            console.error( error );
+        } 
+    );
+    initPhysics();
 
-//physics
+    onResize();
 
-movement = {
-    forward: 0,
-    right: 0,
-    brake: 0,
-    reset: false,
-    accelerateForce: { value: 0, min: - 30, max: 30, step: 1 },
-    brakeForce: { value: 0, min: 0, max: 1, step: 0.05 }
-};
+    const Sphere1 = new THREE.Mesh( new THREE.SphereGeometry( 2 ), new THREE.MeshStandardMaterial( { color: 0xFFFFFF } ) );
+    Sphere1.castShadow = true;
+    Sphere1.receiveShadow = true;
+    Sphere1.position.set( 5, 5, 5);
+    scene.add( Sphere1 );
+    Sphere1.userData.physics = { mass: 0.5, restitution: 0.5 };
+    
+    const Sphere2 = new THREE.Mesh( new THREE.SphereGeometry( 1 ), new THREE.MeshStandardMaterial( { color: 0xFFFFFF } ) );
+    Sphere2.castShadow = true;
+    Sphere2.receiveShadow = true;
+    Sphere2.position.set( -5, 5, 5);
+    scene.add( Sphere2 );
+    Sphere2.userData.physics = { mass: 0.5, restitution: 0.5 };
 
-wheels = [];
+    // Movement input
+    movement = {
+        forward: 0,
+        right: 0,
+        brake: 0,
+        reset: false,
+        accelerateForce: { value: 0, min: - 60, max: 30, step: 1 },
+        brakeForce: { value: 0, min: 0, max: 1, step: 0.05 }
+    };
 
-loaderCar.load( 
-    './car.glb', 
-    function ( glb ) {
-        glb.scene.traverse((child) => {
-            if (intersectObjectsNames.includes(child.name)) {
-                intersectObjects.push(child);
-            }
-            if (child.isMesh) {
-                child.castShadow = true;
-                child.receiveShadow = true;
-            }
-            if (child.name === "car"){
-                car = child;
-                physics.addMesh( child, 10, 0.8 );
-                chassis = child.userData.physics.body;
-                vehicleController = physics.world.createVehicleController( chassis );
-            }
-            if (child.name === "Cylinder"){
-                vehicleController.addWheel(
-                    child.position,
-                    { x: 0.0, y: - 1.0, z: 0.0 },
-                    { x: - 1.0, y: 0.0, z: 0.0 },
-                    0.8,
-                    0.4
-                );
-                vehicleController.setWheelSteering( 0, Math.PI / 4 );
-                vehicleController.setWheelSteering( 1, Math.PI / 4 );
-                vehicleController.setWheelSuspensionStiffness( 0, 24.0 );
-                vehicleController.setWheelFrictionSlip( 0, 1000.0 );
-                vehicleController.setWheelSteering( 0, child.position.z < 0 );
-                wheels.push(child);
-            }
-            if (child.name === "Cylinder.001"){
-                vehicleController.addWheel(
-                    child.position,
-                    { x: 0.0, y: - 1.0, z: 0.0 },
-                    { x: - 1.0, y: 0.0, z: 0.0 },
-                    0.8,
-                    0.4
-                );
-                vehicleController.setWheelSteering( 0, Math.PI / 4 );
-                vehicleController.setWheelSteering( 1, Math.PI / 4 );
-                vehicleController.setWheelSuspensionStiffness( 1, 24.0 );
-                vehicleController.setWheelFrictionSlip( 1, 1000.0 );
-                vehicleController.setWheelSteering( 1, child.position.z < 0 );               
-                wheels.push(child);
-            }
-            if (child.name === "Cylinder.002"){
-                vehicleController.addWheel(
-                    child.position,
-                    { x: 0.0, y: - 1.0, z: 0.0 },
-                    { x: - 1.0, y: 0.0, z: 0.0 },
-                    0.8,
-                    0.62
-                );
-                vehicleController.setWheelSteering( 0, Math.PI / 4 );
-                vehicleController.setWheelSteering( 1, Math.PI / 4 );
-                vehicleController.setWheelSuspensionStiffness( 1, 24.0 );
-                vehicleController.setWheelFrictionSlip( 2, 1000.0 );
-                vehicleController.setWheelSteering( 2, child.position.z < 0 );
-                wheels.push(child);
-            }
-            if (child.name === "Cylinder.003"){
-                vehicleController.addWheel(
-                    child.position,
-                    { x: 0.0, y: - 1.0, z: 0.0 },
-                    { x: - 1.0, y: 0.0, z: 0.0 },
-                    0.8,
-                    0.62
-                );
-                vehicleController.setWheelSteering( 0, Math.PI / 4 );
-                vehicleController.setWheelSteering( 1, Math.PI / 4 );
-                vehicleController.setWheelSuspensionStiffness( 3, 24.0 );
-                vehicleController.setWheelFrictionSlip( 3, 1000.0 );
-                vehicleController.setWheelSteering( 3, child.position.z < 0 );
-                wheels.push(child);
-            }
-        });
-        scene.add( glb.scene );
-    }, 
-    undefined, 
-    function ( error ) {
-        console.error( error );
-    } 
-);
+    window.addEventListener( 'keydown', ( event ) => {
+
+        //console.log( event.key );
+        if ( event.key === 'w' || event.key === 'ArrowUp' ) movement.forward = - 1;
+        if ( event.key === 's' || event.key === 'ArrowDown' ) movement.forward = 1;
+        if ( event.key === 'a' || event.key === 'ArrowLeft' ) movement.right = 1;
+        if ( event.key === 'd' || event.key === 'ArrowRight' ) movement.right = - 1;
+        if ( event.key === 'r' ) movement.reset = true;
+        if ( event.key === ' ' ) movement.brake = 1;
+
+    } );
+
+    window.addEventListener( 'keyup', ( event ) => {
+
+        if ( event.key === 'w' || event.key === 's' || event.key === 'ArrowUp' || event.key === 'ArrowDown' ) movement.forward = 0;
+        if ( event.key === 'a' || event.key === 'd' || event.key === 'ArrowLeft' || event.key === 'ArrowRight' ) movement.right = 0;
+        if ( event.key === 'r' ) movement.reset = false;
+        if ( event.key === ' ' ) movement.brake = 0;
+
+    } );
+
+    window.addEventListener("resize", onResize);
+    window.addEventListener("click", onClick);
+    window.addEventListener("pointermove", onPointerMove);
+}
+
+async function initPhysics() {
+
+    //Initialize physics engine using the script in the jsm/physics folder
+    physics = await RapierPhysics();
+
+    //Optionally display collider outlines
+    physicsHelper = new RapierHelper( physics.world );
+    scene.add( physicsHelper );
+
+    physics.addScene( scene );
+
+    const loaderCar = new GLTFLoader();
+    
+    wheels = [];
+
+    loaderCar.load( 
+        './car.glb', 
+        function ( glb ) {
+            glb.scene.traverse((child) => {
+                if (intersectObjectsNames.includes(child.name)) {
+                    intersectObjects.push(child);
+                }
+                if (child.isMesh) {
+                    child.castShadow = true;
+                    child.receiveShadow = true;
+                }
+                if (child.name === "car"){
+                    car = child;
+                    physics.addMesh( child, 10, 0.7 );
+                    chassis = child.userData.physics.body;
+                    vehicleController = physics.world.createVehicleController( chassis );
+                    child.position.y = 5;
+                }
+                if (child.name === "Cylinder"){
+                    vehicleController.addWheel(
+                        { x: child.position.x, y: child.position.y, z: child.position.z },
+                        { x: 0.0, y: - 1.0, z: 0.0 },   
+                        { x: - 1.0, y: 0.0, z: 0.0 },
+                        0.2,
+                        0.198583
+                    );
+                    vehicleController.setWheelSteering( 0, Math.PI / 4 );
+                    vehicleController.setWheelSteering( 1, Math.PI / 4 );
+                    vehicleController.setWheelSuspensionStiffness( 0, 24.0 );
+                    vehicleController.setWheelFrictionSlip( 0, 2000.0 );
+                    vehicleController.setWheelSteering( 0, child.position.z < 0 );
+                    wheels.push(child);
+                }
+                if (child.name === "Cylinder001"){
+                    vehicleController.addWheel(
+                        { x: child.position.x, y: child.position.y, z: child.position.z },
+                        { x: 0.0, y: - 1.0, z: 0.0 },
+                        { x: - 1.0, y: 0.0, z: 0.0 },
+                        0.2,
+                        0.198583
+                    );
+                    vehicleController.setWheelSteering( 0, Math.PI / 4 );
+                    vehicleController.setWheelSteering( 1, Math.PI / 4 );
+                    vehicleController.setWheelSuspensionStiffness( 1, 24.0 );
+                    vehicleController.setWheelFrictionSlip( 1, 2000.0 );
+                    vehicleController.setWheelSteering( 1, child.position.z < 0 );               
+                    wheels.push(child);
+                }
+                if (child.name === "Cylinder002"){
+                    vehicleController.addWheel(
+                        { x: child.position.x, y: child.position.y, z: child.position.z },
+                        { x: 0.0, y: - 1.0, z: 0.0 },
+                        { x: - 1.0, y: 0.0, z: 0.0 },
+                        0.1,
+                        0.309352
+                    );
+                    vehicleController.setWheelSteering( 0, Math.PI / 4 );
+                    vehicleController.setWheelSteering( 1, Math.PI / 4 );
+                    vehicleController.setWheelSuspensionStiffness( 2, 24.0 );
+                    vehicleController.setWheelFrictionSlip( 2, 2000.0 );
+                    vehicleController.setWheelSteering( 2, child.position.z < 0 );
+                    wheels.push(child);
+                }
+                if (child.name === "Cylinder003"){
+                    vehicleController.addWheel(
+                        { x: child.position.x, y: child.position.y, z: child.position.z },
+                        { x: 0.0, y: - 1.0, z: 0.0 },
+                        { x: - 1.0, y: 0.0, z: 0.0 },
+                        0.1,
+                        0.309352
+                    );
+                    vehicleController.setWheelSteering( 0, Math.PI / 4 );
+                    vehicleController.setWheelSteering( 1, Math.PI / 4 );
+                    vehicleController.setWheelSuspensionStiffness( 3, 24.0 );
+                    vehicleController.setWheelFrictionSlip( 3, 2000.0 );
+                    vehicleController.setWheelSteering( 3, child.position.z < 0 );
+                    wheels.push(child);
+                }
+            });
+            scene.add( glb.scene );
+        }, 
+        undefined, 
+        function ( error ) {
+            console.error( error );
+        } 
+    );
+    console.log(wheels);
+}
 
 function updateWheels() {
 
@@ -231,8 +321,6 @@ function updateCarControl() {
 
     movement.accelerateForce.value = accelerateForce;
 
-    //console.log(accelerateForce);
-
     let brakeForce = 0;
 
     if ( movement.brake > 0 ) {
@@ -266,37 +354,6 @@ function updateCarControl() {
 
 }
 
-//light
-
-const sun = new THREE.DirectionalLight( 0xFFFFFF );
-sun.castShadow = true;
-sun.position.set(25,30,0);
-sun.target.position.set(-5,-5,0);
-sun.shadow.camera.left = -80;
-sun.shadow.camera.right = 80;
-sun.shadow.camera.top = 80;
-sun.shadow.camera.bottom = -80;
-sun.shadow.normalBias = 0.2;
-sun.shadow.mapSize.width = 4096;
-sun.shadow.mapSize.height = 4096;
-scene.add( sun );   
-
-const shadowHelper = new THREE.CameraHelper( sun.shadow.camera );
-scene.add( shadowHelper );
-const helper = new THREE.DirectionalLightHelper( sun, 5 );
-scene.add( helper );
-
-const light = new THREE.AmbientLight( 0x404040, 3 ); // soft white light
-scene.add( light );
-const camera = new THREE.PerspectiveCamera( 
-    75, sizes.width / sizes.height, 0.1, 1000 
-);
-scene.add( camera );
-const controls = new OrbitControls( camera, canvas );
-controls.update();
-camera.position.y = 5;
-camera.position.z = 5;
-
 //events
 
 function onResize(){
@@ -317,31 +374,6 @@ function onPointerMove( event ) {
 function onClick( event ) {
     console.log(intersectObject);
 }
-
-window.addEventListener("resize", onResize);
-window.addEventListener("click", onClick);
-window.addEventListener("pointermove", onPointerMove);
-
-window.addEventListener( 'keydown', ( event ) => {
-
-    //console.log( event.key );
-    if ( event.key === 'w' || event.key === 'ArrowUp' ) movement.forward = - 1;
-    if ( event.key === 's' || event.key === 'ArrowDown' ) movement.forward = 1;
-    if ( event.key === 'a' || event.key === 'ArrowLeft' ) movement.right = 1;
-    if ( event.key === 'd' || event.key === 'ArrowRight' ) movement.right = - 1;
-    if ( event.key === 'r' ) movement.reset = true;
-    if ( event.key === ' ' ) movement.brake = 1;
-
-} );
-
-window.addEventListener( 'keyup', ( event ) => {
-
-    if ( event.key === 'w' || event.key === 's' || event.key === 'ArrowUp' || event.key === 'ArrowDown' ) movement.forward = 0;
-    if ( event.key === 'a' || event.key === 'd' || event.key === 'ArrowLeft' || event.key === 'ArrowRight' ) movement.right = 0;
-    if ( event.key === 'r' ) movement.reset = false;
-    if ( event.key === ' ' ) movement.brake = 0;
-
-} );
 
 //animate
 
@@ -373,11 +405,11 @@ function animate() {
     if ( controls && car ) {
 
         controls.target.copy( car.position );
+        camera.position.copy( { x: car.position.x - 5, y: camera.position.y, z: car.position.z - 10} );
         controls.update();
 
     }
- //   if ( physicsHelper ) physicsHelper.update();
+    if ( physicsHelper ) physicsHelper.update();
 
     renderer.render( scene, camera );
   }
-  renderer.setAnimationLoop( animate );
